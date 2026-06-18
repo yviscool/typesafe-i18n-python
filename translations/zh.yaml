@@ -1,0 +1,7 @@
+hello: "你好 {name}！"
+welcome: "欢迎回来，{name}！"
+items: "{count} 个项目"
+messages: "你有 {count} 条新消息"
+greeting: "{time}好"
+simple: "这是一个简单的翻译"
+age_info: "{name} 今年 {age} 岁"

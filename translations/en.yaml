@@ -1,0 +1,7 @@
+hello: "Hello {name:string}!"
+welcome: "Welcome back, {name:string}!"
+items: "{count:number} {{item|items}}"
+messages: "You have {count:number} new {{message|messages}}"
+greeting: "Good {time:string}"
+simple: "This is a simple translation"
+age_info: "{name:string} is {age:number} years old"
