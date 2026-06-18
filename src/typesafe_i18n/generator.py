@@ -3,8 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from typesafe_i18n.backends import TranslationBackend, YAMLBackend, get_backend_for_file
 from typesafe_i18n.parser import extract_custom_types, extract_params, has_plural, validate_template
 
 
@@ -13,24 +12,26 @@ def generate(
     output_dir: str | Path,
     base_locale: str = "en",
     check_missing: bool = True,
+    backend: TranslationBackend | None = None,
 ) -> list[str]:
-    """Generate type stubs and utility files from translation YAML files.
+    """Generate type stubs and utility files from translation files.
 
     Returns list of warnings (e.g., missing translations in other locales).
     """
     translations_dir = Path(translations_dir)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    _backend = backend or YAMLBackend()
 
-    base_file = _find_locale_file(translations_dir, base_locale)
+    base_file = _find_locale_file(translations_dir, base_locale, _backend)
     if not base_file:
         raise FileNotFoundError(f"Base locale file not found for '{base_locale}' in {translations_dir}")
 
-    with open(base_file, encoding="utf-8") as f:
-        base_translations: dict[str, Any] = yaml.safe_load(f) or {}
+    file_backend = get_backend_for_file(base_file) or _backend
+    base_translations = file_backend.load(base_file)
 
     flat_base = _flatten(base_translations)
-    namespaces = _discover_namespaces(translations_dir, base_locale)
+    namespaces = _discover_namespaces(translations_dir, base_locale, _backend)
 
     all_flat: dict[str, str] = {}
     all_flat.update(flat_base)
@@ -62,7 +63,7 @@ def generate(
 
     warnings: list[str] = []
     if check_missing:
-        warnings = _check_missing_keys(translations_dir, base_locale, all_flat)
+        warnings = _check_missing_keys(translations_dir, base_locale, all_flat, _backend)
 
     for w in warnings:
         print(f"Warning: {w}")
@@ -71,26 +72,31 @@ def generate(
     return warnings + validation_errors
 
 
-def _find_locale_file(translations_dir: Path, locale: str) -> Path | None:
-    for ext in (".yaml", ".yml"):
+def _find_locale_file(translations_dir: Path, locale: str, backend: TranslationBackend) -> Path | None:
+    for ext in backend.extensions():
+        path = translations_dir / f"{locale}{ext}"
+        if path.exists():
+            return path
+    for ext in [".yaml", ".yml", ".json", ".toml"]:
         path = translations_dir / f"{locale}{ext}"
         if path.exists():
             return path
     return None
 
 
-def _discover_namespaces(translations_dir: Path, locale: str) -> dict[str, dict[str, Any]]:
+def _discover_namespaces(
+    translations_dir: Path, locale: str, backend: TranslationBackend
+) -> dict[str, dict[str, Any]]:
     locale_dir = translations_dir / locale
     namespaces: dict[str, dict[str, Any]] = {}
     if not locale_dir.is_dir():
         return namespaces
     for child in sorted(locale_dir.iterdir()):
         if child.is_dir():
-            ns_file = _find_locale_file(child, locale)
+            ns_file = _find_locale_file(child, locale, backend)
             if ns_file:
-                with open(ns_file, encoding="utf-8") as f:
-                    data = yaml.safe_load(f) or {}
-                namespaces[child.name] = data
+                file_backend = get_backend_for_file(ns_file) or backend
+                namespaces[child.name] = file_backend.load(ns_file)
     return namespaces
 
 
@@ -299,20 +305,20 @@ def _check_missing_keys(
     translations_dir: Path,
     base_locale: str,
     base_keys: dict[str, str],
+    backend: TranslationBackend,
 ) -> list[str]:
     warnings: list[str] = []
     for f in translations_dir.iterdir():
         if f.is_dir():
             continue
+        file_backend = get_backend_for_file(f)
+        if file_backend is None:
+            continue
         locale = f.stem
         if locale == base_locale:
             continue
-        if f.suffix not in (".yaml", ".yml"):
-            continue
 
-        with open(f, encoding="utf-8") as fh:
-            data: dict[str, Any] = yaml.safe_load(fh) or {}
-
+        data = file_backend.load(f)
         flat = _flatten(data)
         missing = set(base_keys.keys()) - set(flat.keys())
         if missing:

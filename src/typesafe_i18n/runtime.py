@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable
 
-import yaml
-
+from typesafe_i18n.backends import TranslationBackend, YAMLBackend, get_backend_for_file
 from typesafe_i18n.parser import ArgPart, PluralPart, TextPart, parse_translation
 from typesafe_i18n.plural import get_plural_form
 
@@ -13,28 +13,44 @@ from typesafe_i18n.plural import get_plural_form
 class I18n:
     """Internationalization runtime with type-safe translations.
 
-    Loads YAML translation files and renders translated strings with
-    parameter substitution, plural support, formatters, and switch-case.
+    Thread-safe. Supports YAML, JSON, and TOML translation files.
+    Uses LRU caching for parsed templates.
     """
 
-    def __init__(self, translations_dir: str | Path, locale: str, cache_size: int = 256) -> None:
+    def __init__(
+        self,
+        translations_dir: str | Path,
+        locale: str,
+        cache_size: int = 256,
+        backend: TranslationBackend | None = None,
+    ) -> None:
         self._translations_dir = Path(translations_dir)
         self._locale = locale
+        self._cache_size = cache_size
+        self._backend = backend or YAMLBackend()
+        self._lock = threading.Lock()
         self._translations: dict[str, Any] = {}
         self._cache: OrderedDict[str, list[ArgPart | PluralPart | TextPart]] = OrderedDict()
-        self._cache_size = cache_size
         self._formatters: dict[str, Callable[..., str]] = {}
         self._load(self._translations_dir, locale)
 
     def _load(self, translations_dir: Path, locale: str) -> None:
-        path = translations_dir / f"{locale}.yaml"
-        if not path.exists():
-            path = translations_dir / f"{locale}.yml"
-        if path.exists():
-            with open(path, encoding="utf-8") as f:
-                self._translations = yaml.safe_load(f) or {}
-        else:
-            raise FileNotFoundError(f"Translation file not found: {path}")
+        path = self._find_translation_file(translations_dir, locale)
+        if path is None:
+            raise FileNotFoundError(f"Translation file not found for locale '{locale}' in {translations_dir}")
+        backend = get_backend_for_file(path) or self._backend
+        self._translations = backend.load(path)
+
+    def _find_translation_file(self, dir: Path, locale: str) -> Path | None:
+        for ext in self._backend.extensions():
+            path = dir / f"{locale}{ext}"
+            if path.exists():
+                return path
+        for backend_ext in [".yaml", ".yml", ".json", ".toml"]:
+            path = dir / f"{locale}{backend_ext}"
+            if path.exists():
+                return path
+        return None
 
     @property
     def locale(self) -> str:
@@ -42,17 +58,19 @@ class I18n:
 
     def set_locale(self, locale: str) -> None:
         """Switch to a different locale, reloading translations from disk."""
-        self._locale = locale
-        self._translations = {}
-        self._cache.clear()
-        self._load(self._translations_dir, locale)
+        with self._lock:
+            self._locale = locale
+            self._translations = {}
+            self._cache.clear()
+            self._load(self._translations_dir, locale)
 
     def set_formatters(self, formatters: dict[str, Callable[..., str]]) -> None:
         """Register custom formatter functions."""
-        self._formatters = formatters
+        with self._lock:
+            self._formatters = formatters
 
     def t(self, key: str, **kwargs: Any) -> str:
-        """Translate a key with the current locale."""
+        """Translate a key with the current locale. Thread-safe."""
         template = self._get_template(key)
         parts = self._get_parts(template)
         return self._render(parts, kwargs)
@@ -74,13 +92,15 @@ class I18n:
         return str(obj) if obj is not None else key
 
     def _get_parts(self, template: str) -> list[ArgPart | PluralPart | TextPart]:
-        if template in self._cache:
-            self._cache.move_to_end(template)
-            return self._cache[template]
+        with self._lock:
+            if template in self._cache:
+                self._cache.move_to_end(template)
+                return self._cache[template]
         parts = parse_translation(template)
-        self._cache[template] = parts
-        if len(self._cache) > self._cache_size:
-            self._cache.popitem(last=False)
+        with self._lock:
+            self._cache[template] = parts
+            if len(self._cache) > self._cache_size:
+                self._cache.popitem(last=False)
         return parts
 
     def _render(self, parts: list[ArgPart | PluralPart | TextPart], kwargs: dict[str, Any]) -> str:
