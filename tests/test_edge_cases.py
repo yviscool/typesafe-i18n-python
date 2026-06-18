@@ -1,13 +1,10 @@
-import json
 import tempfile
 from pathlib import Path
 
-import pytest
 import yaml
 
 from typesafe_i18n.runtime import I18n
-from typesafe_i18n.parser import parse_translation, validate_template
-from typesafe_i18n.backends import JSONBackend
+from typesafe_i18n.parser import validate_template
 
 
 class TestYAMLSpecialChars:

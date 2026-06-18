@@ -9,8 +9,9 @@ from typing import Any
 
 import yaml
 
-from typesafe_i18n.generator import generate
-from typesafe_i18n.parser import extract_params
+from typesafe_i18n.generator import TranslationValidationError, generate
+from typesafe_i18n.parser import validate_template
+from typesafe_i18n.translation_files import collect_locales, flatten_translation_tree, iter_translation_files, load_locale_sections
 
 
 def main() -> None:
@@ -68,7 +69,9 @@ def _cmd_generate(args: argparse.Namespace) -> None:
         if args.watch:
             _watch_and_generate(args.dir, args.output, args.locale, not args.no_check)
         else:
-            generate(args.dir, args.output, args.locale, check_missing=not args.no_check)
+            generate(args.dir, args.output, args.locale, check_missing=not args.no_check, fail_on_validation_error=True)
+    except TranslationValidationError:
+        sys.exit(1)
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -103,9 +106,7 @@ def _get_last_modified(directory: str) -> float:
     if not path.exists():
         return 0
     latest = 0.0
-    for f in path.rglob("*.yaml"):
-        latest = max(latest, f.stat().st_mtime)
-    for f in path.rglob("*.yml"):
+    for f in iter_translation_files(path):
         latest = max(latest, f.stat().st_mtime)
     return latest
 
@@ -119,35 +120,34 @@ def _cmd_validate(args: argparse.Namespace) -> None:
     errors: list[str] = []
     warnings: list[str] = []
 
-    base_file = _find_locale_file(translations_dir, args.locale)
-    if not base_file:
+    base_sections = load_locale_sections(translations_dir, args.locale)
+    if not base_sections:
         print(f"Error: Base locale file not found: {args.locale}", file=sys.stderr)
         sys.exit(1)
 
-    with open(base_file, encoding="utf-8") as f:
-        base_data = yaml.safe_load(f) or {}
-    base_flat = _flatten(base_data)
+    base_flat_sections = {
+        prefix: flatten_translation_tree(data, prefix=prefix) for prefix, data in base_sections.items()
+    }
 
-    for file_path in sorted(translations_dir.iterdir()):
-        if file_path.is_dir() or file_path.suffix not in (".yaml", ".yml"):
-            continue
-        locale = file_path.stem
-        with open(file_path, encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-        flat = _flatten(data)
+    for locale in collect_locales(translations_dir):
+        locale_sections = load_locale_sections(translations_dir, locale)
+        all_prefixes = sorted(set(base_flat_sections) | set(locale_sections))
 
-        missing = set(base_flat.keys()) - set(flat.keys())
-        extra = set(flat.keys()) - set(base_flat.keys())
+        for prefix in all_prefixes:
+            base_flat = base_flat_sections.get(prefix, {})
+            current_flat = flatten_translation_tree(locale_sections.get(prefix, {}), prefix=prefix)
 
-        for key in sorted(missing):
-            warnings.append(f"[{locale}] Missing key: {key}")
-        for key in sorted(extra):
-            warnings.append(f"[{locale}] Extra key: {key}")
+            missing = set(base_flat.keys()) - set(current_flat.keys())
+            extra = set(current_flat.keys()) - set(base_flat.keys())
 
-        for key, template in flat.items():
-            from typesafe_i18n.parser import validate_template
-            errs = validate_template(template, f"{locale}.{key}")
-            errors.extend(errs)
+            for key in sorted(missing):
+                warnings.append(f"[{locale}] Missing key: {key}")
+            for key in sorted(extra):
+                warnings.append(f"[{locale}] Extra key: {key}")
+
+            for key, template in current_flat.items():
+                errs = validate_template(template, f"{locale}.{key}")
+                errors.extend(errs)
 
     if errors:
         print("Errors:")
@@ -180,12 +180,10 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         for match in t_call_re.finditer(content):
             used_keys.add(match.group(1))
 
-    base_file = _find_locale_file(translations_dir, args.locale)
+    base_sections = load_locale_sections(translations_dir, args.locale)
     defined_keys: set[str] = set()
-    if base_file:
-        with open(base_file, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        defined_keys = set(_flatten(data).keys())
+    for prefix, data in base_sections.items():
+        defined_keys.update(flatten_translation_tree(data, prefix=prefix).keys())
 
     unused = defined_keys - used_keys
     undefined = used_keys - defined_keys
@@ -210,15 +208,14 @@ def _cmd_export(args: argparse.Namespace) -> None:
 
     result: dict[str, dict[str, str]] = {}
 
-    for file_path in sorted(translations_dir.iterdir()):
-        if file_path.is_dir() or file_path.suffix not in (".yaml", ".yml"):
-            continue
-        locale = file_path.stem
-        if args.locale and locale != args.locale:
-            continue
-        with open(file_path, encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-        result[locale] = _flatten(data)
+    locales = [args.locale] if args.locale else collect_locales(translations_dir)
+    for locale in locales:
+        locale_sections = load_locale_sections(translations_dir, locale)
+        flat: dict[str, str] = {}
+        for prefix, data in locale_sections.items():
+            flat.update(flatten_translation_tree(data, prefix=prefix))
+        if flat:
+            result[locale] = flat
 
     output_path = Path(args.output)
     with open(output_path, "w", encoding="utf-8") as out:
@@ -247,25 +244,6 @@ def _cmd_import(args: argparse.Namespace) -> None:
         with open(out_file, "w", encoding="utf-8") as f:
             yaml.dump(nested, f, allow_unicode=True, default_flow_style=False)
         print(f"Imported {len(translations)} keys to {out_file}")
-
-
-def _find_locale_file(translations_dir: Path, locale: str) -> Path | None:
-    for ext in (".yaml", ".yml"):
-        path = translations_dir / f"{locale}{ext}"
-        if path.exists():
-            return path
-    return None
-
-
-def _flatten(d: dict[str, Any], prefix: str = "") -> dict[str, str]:
-    result: dict[str, str] = {}
-    for k, v in d.items():
-        key = f"{prefix}.{k}" if prefix else k
-        if isinstance(v, dict):
-            result.update(_flatten(v, key))
-        elif isinstance(v, str):
-            result[key] = v
-    return result
 
 
 if __name__ == "__main__":

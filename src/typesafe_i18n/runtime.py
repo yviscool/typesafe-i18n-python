@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from typesafe_i18n.backends import TranslationBackend, YAMLBackend, get_backend_for_file
-from typesafe_i18n.parser import ArgPart, PluralPart, TextPart, parse_translation
+from typesafe_i18n.parser import ArgPart, PluralPart, TextPart, normalize_placeholder_name, parse_translation
 from typesafe_i18n.plural import get_plural_form
 
 
@@ -88,7 +88,7 @@ class I18n:
         if isinstance(obj, str):
             return obj
         if isinstance(obj, dict):
-            return str(obj.get("other", ""))
+            return key
         return str(obj) if obj is not None else key
 
     def _get_parts(self, template: str) -> list[ArgPart | PluralPart | TextPart]:
@@ -112,23 +112,27 @@ class I18n:
                 result.append(part.text)
 
             elif isinstance(part, ArgPart):
-                value = kwargs.get(part.name)
+                value = kwargs.get(normalize_placeholder_name(part.name))
                 if value is None:
                     if part.optional:
                         continue
                     result.append(f"{{{part.name}}}")
                     continue
-                if isinstance(value, (int, float)):
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
                     pending_plural_count = int(value)
                 formatted = self._format_value(value, part)
                 result.append(formatted)
 
             elif isinstance(part, PluralPart):
-                if pending_plural_count is not None:
-                    form = get_plural_form(self._locale, pending_plural_count)
+                count_value = kwargs.get(normalize_placeholder_name(part.key))
+                if count_value is None:
+                    count_value = pending_plural_count
+
+                if count_value is not None:
+                    form = get_plural_form(self._locale, int(count_value))
                     idx = self._plural_index(form, len(part.forms))
                     text = part.forms[idx]
-                    text = text.replace("??", str(pending_plural_count))
+                    text = text.replace("??", str(count_value))
                     result.append(text)
                     pending_plural_count = None
                 elif len(part.forms) == 1:
@@ -140,12 +144,6 @@ class I18n:
 
     def _format_value(self, value: Any, part: ArgPart) -> str:
         result = str(value)
-
-        if part.type and part.type in self._formatters:
-            try:
-                result = self._formatters[part.type](result)
-            except Exception:
-                pass
 
         for fmt_name in part.formatters:
             if fmt_name in self._formatters:

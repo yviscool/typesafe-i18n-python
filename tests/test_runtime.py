@@ -84,6 +84,16 @@ class TestI18nPlural:
         i18n = I18n(translations_dir, "en")
         assert i18n.t("items", count=0) == "0 items"
 
+    def test_plural_uses_matching_key(self, translations_dir):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data = {
+                "message": "{other:number} {{count:item|items}}",
+            }
+            with open(Path(tmpdir) / "en.yaml", "w", encoding="utf-8") as f:
+                yaml.dump(data, f)
+            i18n = I18n(tmpdir, "en")
+            assert i18n.t("message", count=1, other=2) == "2 item"
+
 
 class TestI18nFormatters:
     def test_single_formatter(self, translations_dir):

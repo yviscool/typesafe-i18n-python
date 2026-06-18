@@ -130,6 +130,10 @@ def _plural_spanish(count: int) -> str:
     return "other"
 
 
+def _plural_chinese(count: int) -> str:
+    return "other"
+
+
 _plural_rules: dict[str, _PluralRule] = {
     "ar": _plural_arabic,
     "pl": _plural_polish,
@@ -148,6 +152,7 @@ _plural_rules: dict[str, _PluralRule] = {
     "it": _plural_spanish,
     "pt": _plural_spanish,
     "ja": _plural_other,
+    "zh": _plural_chinese,
     "ko": _plural_other,
     "vi": _plural_other,
     "th": _plural_other,

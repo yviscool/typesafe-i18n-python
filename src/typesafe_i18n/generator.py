@@ -3,8 +3,25 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from typesafe_i18n.backends import TranslationBackend, YAMLBackend, get_backend_for_file
-from typesafe_i18n.parser import extract_custom_types, extract_params, has_plural, validate_template
+from typesafe_i18n.backends import TranslationBackend, YAMLBackend
+from typesafe_i18n.parser import (
+    PluralPart,
+    extract_custom_types,
+    extract_params,
+    has_plural,
+    normalize_placeholder_name,
+    parse_translation,
+    validate_template,
+)
+from typesafe_i18n.translation_files import collect_locales, flatten_translation_tree, load_locale_sections
+
+
+class TranslationValidationError(RuntimeError):
+    """Raised when generated translations contain template validation errors."""
+
+    def __init__(self, errors: list[str]) -> None:
+        super().__init__("\n".join(errors))
+        self.errors = errors
 
 
 def generate(
@@ -13,6 +30,7 @@ def generate(
     base_locale: str = "en",
     check_missing: bool = True,
     backend: TranslationBackend | None = None,
+    fail_on_validation_error: bool = False,
 ) -> list[str]:
     """Generate type stubs and utility files from translation files.
 
@@ -23,21 +41,11 @@ def generate(
     output_dir.mkdir(parents=True, exist_ok=True)
     _backend = backend or YAMLBackend()
 
-    base_file = _find_locale_file(translations_dir, base_locale, _backend)
-    if not base_file:
+    base_sections = load_locale_sections(translations_dir, base_locale, _backend)
+    if not base_sections:
         raise FileNotFoundError(f"Base locale file not found for '{base_locale}' in {translations_dir}")
 
-    file_backend = get_backend_for_file(base_file) or _backend
-    base_translations = file_backend.load(base_file)
-
-    flat_base = _flatten(base_translations)
-    namespaces = _discover_namespaces(translations_dir, base_locale, _backend)
-
-    all_flat: dict[str, str] = {}
-    all_flat.update(flat_base)
-    for ns_name, ns_translations in namespaces.items():
-        ns_flat = _flatten(ns_translations, prefix=ns_name)
-        all_flat.update(ns_flat)
+    all_flat = _flatten_sections(base_sections)
 
     validation_errors = _validate_translations(all_flat)
     for err in validation_errors:
@@ -63,52 +71,16 @@ def generate(
 
     warnings: list[str] = []
     if check_missing:
-        warnings = _check_missing_keys(translations_dir, base_locale, all_flat, _backend)
+        warnings = _check_missing_keys(translations_dir, base_locale, base_sections, _backend)
 
     for w in warnings:
         print(f"Warning: {w}")
     print(f"Generated type stubs in {output_dir}")
 
+    if fail_on_validation_error and validation_errors:
+        raise TranslationValidationError(validation_errors)
+
     return warnings + validation_errors
-
-
-def _find_locale_file(translations_dir: Path, locale: str, backend: TranslationBackend) -> Path | None:
-    for ext in backend.extensions():
-        path = translations_dir / f"{locale}{ext}"
-        if path.exists():
-            return path
-    for ext in [".yaml", ".yml", ".json", ".toml"]:
-        path = translations_dir / f"{locale}{ext}"
-        if path.exists():
-            return path
-    return None
-
-
-def _discover_namespaces(
-    translations_dir: Path, locale: str, backend: TranslationBackend
-) -> dict[str, dict[str, Any]]:
-    locale_dir = translations_dir / locale
-    namespaces: dict[str, dict[str, Any]] = {}
-    if not locale_dir.is_dir():
-        return namespaces
-    for child in sorted(locale_dir.iterdir()):
-        if child.is_dir():
-            ns_file = _find_locale_file(child, locale, backend)
-            if ns_file:
-                file_backend = get_backend_for_file(ns_file) or backend
-                namespaces[child.name] = file_backend.load(ns_file)
-    return namespaces
-
-
-def _flatten(d: dict[str, Any], prefix: str = "") -> dict[str, str]:
-    result: dict[str, str] = {}
-    for k, v in d.items():
-        key = f"{prefix}.{k}" if prefix else k
-        if isinstance(v, dict):
-            result.update(_flatten(v, key))
-        elif isinstance(v, str):
-            result[key] = v
-    return result
 
 
 def _validate_translations(translations: dict[str, str]) -> list[str]:
@@ -147,7 +119,7 @@ def _generate_stub(translations: dict[str, str], custom_types: set[str]) -> str:
             params_list: list[str] = []
             for name, type_name in sorted(params.items()):
                 python_type = _map_type(type_name)
-                params_list.append(f"{name}: {python_type}")
+                params_list.append(f"{normalize_placeholder_name(name)}: {python_type}")
 
             if plural and not params:
                 count_param = _guess_plural_param(template)
@@ -190,7 +162,7 @@ def _generate_base_types(translations: dict[str, str]) -> str:
             params_list: list[str] = []
             for name, type_name in sorted(params.items()):
                 python_type = _map_type(type_name)
-                params_list.append(f"{name}: {python_type}")
+                params_list.append(f"{normalize_placeholder_name(name)}: {python_type}")
 
             if plural and not params:
                 count_param = _guess_plural_param(template)
@@ -295,34 +267,49 @@ def _map_type(type_name: str | None) -> str:
 
 
 def _guess_plural_param(template: str) -> str:
+    for part in parse_translation(template):
+        if isinstance(part, PluralPart):
+            normalized = normalize_placeholder_name(part.key)
+            if normalized:
+                return normalized
     params = extract_params(template)
     if params:
-        return next(iter(params))
+        return normalize_placeholder_name(next(iter(params)))
     return "count"
+
+
+def _flatten_sections(sections: dict[str, dict[str, Any]]) -> dict[str, str]:
+    flat: dict[str, str] = {}
+    for prefix, section in sections.items():
+        flat.update(flatten_translation_tree(section, prefix=prefix))
+    return flat
+
+
+def _flatten(d: dict[str, Any], prefix: str = "") -> dict[str, str]:
+    return flatten_translation_tree(d, prefix=prefix)
 
 
 def _check_missing_keys(
     translations_dir: Path,
     base_locale: str,
-    base_keys: dict[str, str],
+    base_sections: dict[str, dict[str, Any]],
     backend: TranslationBackend,
 ) -> list[str]:
     warnings: list[str] = []
-    for f in translations_dir.iterdir():
-        if f.is_dir():
-            continue
-        file_backend = get_backend_for_file(f)
-        if file_backend is None:
-            continue
-        locale = f.stem
+    base_flat_sections = {
+        prefix: flatten_translation_tree(data, prefix=prefix) for prefix, data in base_sections.items()
+    }
+
+    for locale in collect_locales(translations_dir):
         if locale == base_locale:
             continue
 
-        data = file_backend.load(f)
-        flat = _flatten(data)
-        missing = set(base_keys.keys()) - set(flat.keys())
-        if missing:
-            for key in sorted(missing):
-                warnings.append(f"Locale '{locale}' missing key: {key}")
+        locale_sections = load_locale_sections(translations_dir, locale, backend)
+        for prefix, base_flat in base_flat_sections.items():
+            current_flat = flatten_translation_tree(locale_sections.get(prefix, {}), prefix=prefix)
+            missing = set(base_flat.keys()) - set(current_flat.keys())
+            if missing:
+                for key in sorted(missing):
+                    warnings.append(f"Locale '{locale}' missing key: {key}")
 
     return warnings

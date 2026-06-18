@@ -21,7 +21,7 @@ class TestBenchmark:
             _create_large_translations(tmpdir)
 
             start = time.perf_counter()
-            i18n = I18n(tmpdir, "en")
+            I18n(tmpdir, "en")
             elapsed = time.perf_counter() - start
 
             assert elapsed < 2.0, f"Load time {elapsed:.3f}s exceeds 2s limit"

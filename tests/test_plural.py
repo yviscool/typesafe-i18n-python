@@ -1,5 +1,3 @@
-import pytest
-
 from typesafe_i18n.plural import get_plural_form
 
 
@@ -13,7 +11,7 @@ class TestPluralRules:
 
     def test_chinese(self):
         assert get_plural_form("zh", 0) == "other"
-        assert get_plural_form("zh", 1) == "one"
+        assert get_plural_form("zh", 1) == "other"
         assert get_plural_form("zh", 100) == "other"
 
     def test_arabic(self):
@@ -75,7 +73,7 @@ class TestPluralRules:
 
     def test_locale_with_region(self):
         assert get_plural_form("en-US", 1) == "one"
-        assert get_plural_form("zh-CN", 1) == "one"
+        assert get_plural_form("zh-CN", 1) == "other"
         assert get_plural_form("pt_BR", 1) == "one"
         assert get_plural_form("en-GB", 2) == "other"
 

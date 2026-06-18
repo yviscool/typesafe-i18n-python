@@ -1,9 +1,6 @@
-import pytest
-
 from typesafe_i18n.parser import (
     ArgPart,
     PluralPart,
-    SwitchCase,
     TextPart,
     extract_custom_types,
     extract_params,
@@ -90,6 +87,7 @@ class TestParseTranslation:
         parts = parse_translation("{count} {{item|items}}")
         assert len(parts) == 3
         assert isinstance(parts[2], PluralPart)
+        assert parts[2].key == "count"
         assert parts[2].forms == ("item", "items")
 
     def test_plural_three_forms(self):

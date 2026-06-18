@@ -4,7 +4,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-import pytest
 import yaml
 
 
@@ -28,6 +27,22 @@ class TestEndToEnd:
             )
             assert result.returncode == 0
             assert (out_dir / "types.pyi").exists()
+
+    def test_generate_fails_on_invalid_template(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trans_dir = Path(tmpdir) / "translations"
+            out_dir = Path(tmpdir) / "_generated"
+            trans_dir.mkdir()
+
+            with open(trans_dir / "en.yaml", "w") as f:
+                yaml.dump({"bad": "Hello {name"}, f)
+
+            result = subprocess.run(
+                [sys.executable, "-m", "typesafe_i18n.cli", "generate", "-d", str(trans_dir), "-o", str(out_dir)],
+                capture_output=True, text=True, cwd=str(Path(__file__).parent.parent),
+            )
+            assert result.returncode == 1
+            assert "unmatched" in result.stdout.lower()
 
     def test_generate_and_typecheck(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -74,6 +89,22 @@ reveal_type(result)
                 yaml.dump(en, f)
             with open(trans_dir / "zh.yaml", "w") as f:
                 yaml.dump(zh, f)
+
+            result = subprocess.run(
+                [sys.executable, "-m", "typesafe_i18n.cli", "validate", "-d", str(trans_dir)],
+                capture_output=True, text=True, cwd=str(Path(__file__).parent.parent),
+            )
+            assert result.returncode == 0
+
+    def test_validate_json_locale(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trans_dir = Path(tmpdir) / "translations"
+            trans_dir.mkdir()
+
+            with open(trans_dir / "en.json", "w", encoding="utf-8") as f:
+                json.dump({"hello": "Hello {name:string}!"}, f)
+            with open(trans_dir / "zh.json", "w", encoding="utf-8") as f:
+                json.dump({"hello": "你好 {name:string}！"}, f)
 
             result = subprocess.run(
                 [sys.executable, "-m", "typesafe_i18n.cli", "validate", "-d", str(trans_dir)],

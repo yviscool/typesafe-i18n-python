@@ -63,7 +63,7 @@ class TestGenerate:
                 with open(Path(trans_dir) / "en.yaml", "w") as f:
                     yaml.dump(en, f)
 
-                warnings = generate(trans_dir, out_dir, "en")
+                generate(trans_dir, out_dir, "en")
                 assert (Path(out_dir) / "types.pyi").exists()
                 assert (Path(out_dir) / "base_types.pyi").exists()
                 assert (Path(out_dir) / "util.py").exists()

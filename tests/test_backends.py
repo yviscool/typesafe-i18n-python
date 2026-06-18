@@ -85,3 +85,12 @@ class TestGetBackendForFile:
     def test_unknown(self):
         backend = get_backend_for_file(Path("test.txt"))
         assert backend is None
+
+
+class TestTOMLBackend:
+    def test_save_and_load(self):
+        with tempfile.NamedTemporaryFile(suffix=".toml", delete=False) as f:
+            backend = TOMLBackend()
+            backend.save(Path(f.name), {"hello": "Hi"})
+            data = backend.load(Path(f.name))
+            assert data == {"hello": "Hi"}

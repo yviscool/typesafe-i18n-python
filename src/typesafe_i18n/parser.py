@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import keyword
 from dataclasses import dataclass
 
 
@@ -30,12 +31,13 @@ class ArgPart:
 @dataclass(frozen=True)
 class PluralPart:
     """Plural form block in a translation template."""
+    key: str
     forms: tuple[str, ...]
 
 
 Part = TextPart | ArgPart | PluralPart
 
-_PLURAL_RE = re.compile(r"\{\{([^}]+)\}\}")
+_PLURAL_RE = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
 _BASE_TYPES = frozenset({
     "string", "str", "number", "int", "float", "boolean", "bool",
     "Date", "date", "array", "object", "bigint", "undefined", "null",
@@ -46,22 +48,24 @@ def parse_translation(template: str) -> list[Part]:
     """Parse a translation template string into its constituent parts."""
     parts: list[Part] = []
     pos = 0
+    last_key = ""
 
     for match in _PLURAL_RE.finditer(template):
         start, end = match.span()
         if start > pos:
-            _parse_args(template[pos:start], parts)
-        forms = tuple(f.strip() for f in match.group(1).split("|"))
-        parts.append(PluralPart(forms=forms))
+            last_key = _parse_args(template[pos:start], parts, last_key)
+        key, forms = _parse_plural(match.group(1).strip(), last_key)
+        parts.append(PluralPart(key=key, forms=forms))
+        last_key = key
         pos = end
 
     if pos < len(template):
-        _parse_args(template[pos:], parts)
+        _parse_args(template[pos:], parts, last_key)
 
     return parts
 
 
-def _parse_args(text: str, parts: list[Part]) -> None:
+def _parse_args(text: str, parts: list[Part], last_key: str) -> str:
     pos = 0
     while pos < len(text):
         if text[pos] == "{":
@@ -74,6 +78,7 @@ def _parse_args(text: str, parts: list[Part]) -> None:
             if inner:
                 part = _parse_arg(inner)
                 parts.append(part)
+                last_key = part.name
             pos = end + 1
         else:
             next_brace = text.find("{", pos)
@@ -83,6 +88,7 @@ def _parse_args(text: str, parts: list[Part]) -> None:
             else:
                 parts.append(TextPart(text=text[pos:next_brace]))
                 pos = next_brace
+    return last_key
 
 
 def _find_matching_brace(text: str, start: int) -> int:
@@ -139,6 +145,20 @@ def _parse_arg(inner: str) -> ArgPart:
         formatters=formatters,
         switch=switch,
     )
+
+
+def _parse_plural(content: str, fallback_key: str) -> tuple[str, tuple[str, ...]]:
+    key = fallback_key or "0"
+    body = content
+
+    if ":" in content:
+        potential_key, potential_body = content.split(":", 1)
+        if potential_body.strip():
+            key = potential_key.strip() or key
+            body = potential_body
+
+    forms = tuple(f.strip() for f in body.split("|"))
+    return key, forms
 
 
 def _split_pipes(s: str) -> list[str]:
@@ -252,3 +272,14 @@ def validate_template(template: str, key: str) -> list[str]:
     if depth > 0:
         errors.append(f"Key '{key}': unmatched '{{' - missing {depth} closing brace(s)")
     return errors
+
+
+def normalize_placeholder_name(name: str) -> str:
+    """Convert a placeholder name into a valid Python identifier."""
+    if name.isidentifier() and not keyword.iskeyword(name):
+        return name
+
+    cleaned = re.sub(r"\W+", "_", name).strip("_")
+    if not cleaned:
+        cleaned = "value"
+    return f"arg_{cleaned}"
