@@ -4,7 +4,7 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import yaml
 
@@ -66,7 +66,7 @@ class TestTypesafeI18n:
             }
             app.extensions = {}
 
-            ext = TypesafeI18n(app=app)
+            TypesafeI18n(app=app)
 
             assert "typesafe_i18n" in app.extensions
 

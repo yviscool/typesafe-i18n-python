@@ -10,6 +10,7 @@ import asyncio
 from typesafe_i18n.backends import TranslationBackend, YAMLBackend, get_backend_for_file
 from typesafe_i18n.parser import ArgPart, PluralPart, TextPart, normalize_placeholder_name, parse_translation
 from typesafe_i18n.plural import get_plural_form
+from typesafe_i18n.translation_files import find_file_by_stem
 
 
 class I18n:
@@ -48,15 +49,7 @@ class I18n:
         self._translations = backend.load(path)
 
     def _find_translation_file(self, dir: Path, locale: str) -> Path | None:
-        for ext in self._backend.extensions():
-            path = dir / f"{locale}{ext}"
-            if path.exists():
-                return path
-        for backend_ext in [".yaml", ".yml", ".json", ".toml"]:
-            path = dir / f"{locale}{backend_ext}"
-            if path.exists():
-                return path
-        return None
+        return find_file_by_stem(dir, locale, self._backend)
 
     @property
     def locale(self) -> str:
@@ -125,15 +118,7 @@ class I18n:
     def _find_namespace_file(self, locale_dir: Path, namespace: str) -> Path | None:
         if not locale_dir.is_dir():
             return None
-        for ext in self._backend.extensions():
-            path = locale_dir / f"{namespace}{ext}"
-            if path.exists():
-                return path
-        for ext in (".yaml", ".yml", ".json", ".toml"):
-            path = locale_dir / f"{namespace}{ext}"
-            if path.exists():
-                return path
-        return None
+        return find_file_by_stem(locale_dir, namespace, self._backend)
 
     def t(self, key: str, **kwargs: Any) -> str:
         """Translate a key with the current locale. Thread-safe."""
@@ -275,18 +260,7 @@ def _find_and_load_namespace(
         raise FileNotFoundError(
             f"Namespace file not found for locale '{locale}', namespace '{namespace}' in {translations_dir}"
         )
-    path: Path | None = None
-    for ext in backend.extensions():
-        candidate = locale_dir / f"{namespace}{ext}"
-        if candidate.exists():
-            path = candidate
-            break
-    if path is None:
-        for ext in (".yaml", ".yml", ".json", ".toml"):
-            candidate = locale_dir / f"{namespace}{ext}"
-            if candidate.exists():
-                path = candidate
-                break
+    path = find_file_by_stem(locale_dir, namespace, backend)
     if path is None:
         raise FileNotFoundError(
             f"Namespace file not found for locale '{locale}', namespace '{namespace}' in {translations_dir}"

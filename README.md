@@ -5,16 +5,20 @@ Type-safe internationalization for Python. Get compile-time errors when you use 
 ## Features
 
 - Type-safe translations with compile-time checking
-- YAML translation files
+- YAML, JSON, TOML translation files
 - Automatic type stub generation
 - CLDR plural rules (32+ languages)
 - Formatter chains
 - Switch-case syntax
 - Custom formatters
-- Namespace support
+- Namespace support with fallback
+- Fallback locale
+- Async loading
+- Locale detection (Accept-Language, cookie, env, query string)
 - Missing key detection
 - Watch mode
-- Framework adapters (Django, Flask, FastAPI, Jinja2)
+- Framework adapters (Django, Flask, FastAPI)
+- Config file (`.typesafe-i18n.json`)
 
 ## Installation
 
@@ -102,6 +106,160 @@ gender: "{gender|{male:He,female:She,*:They}} replied"
 status: "{status:string|lower|{active:OK,inactive:Off}}"
 ```
 
+## Namespaces
+
+Organize translations into separate files per locale:
+
+```
+translations/
+  en.yaml              # main translations
+  en/
+    settings.yaml      # "settings" namespace
+    account.yaml       # "account" namespace
+  zh.yaml
+  zh/
+    settings.yaml
+    account.yaml
+```
+
+Load and use namespaces with the `:` prefix:
+
+```python
+from typesafe_i18n.runtime import I18n
+
+i18n = I18n("translations", "en")
+i18n.load_namespace("settings")
+i18n.load_namespace("account")
+
+i18n.t("settings:title")           # "Settings"
+i18n.t("account:greeting", name="Alice")  # "Welcome Alice!"
+i18n.t("hello")                    # still works for main translations
+```
+
+### Async namespace loading
+
+```python
+await i18n.load_namespace_async("settings")
+```
+
+### Namespace fallback
+
+When a namespace key is not found in the current locale, it automatically falls back to the fallback locale's namespace:
+
+```python
+i18n = I18n("translations", "zh")
+i18n.set_fallback_locale("en")
+
+# If zh/account.yaml doesn't exist but en/account.yaml does:
+i18n.t("account:greeting", name="Alice")  # "Welcome Alice!" (from en)
+```
+
+## Fallback Locale
+
+Set a fallback locale for missing translations:
+
+```python
+i18n = I18n("translations", "zh")
+i18n.set_fallback_locale("en")
+
+i18n.t("hello", name="World")    # "你好 World!" (from zh)
+i18n.t("items", count=5)         # "5 items" (from en, missing in zh)
+i18n.t("nonexistent")            # "nonexistent" (missing in both)
+```
+
+Fallback also works with nested keys and namespaces.
+
+## Async Loading
+
+Load translations asynchronously (useful for web frameworks):
+
+```python
+from typesafe_i18n.async_loader import load_locale_async, load_namespace_async
+
+data = await load_locale_async("translations", "en")
+data = await load_namespace_async("translations", "en", "settings")
+```
+
+## Config File
+
+Create `.typesafe-i18n.json` in your project root to configure defaults:
+
+```json
+{
+  "baseLocale": "zh",
+  "translationsPath": "./i18n",
+  "outputPath": "./src/generated"
+}
+```
+
+All CLI commands read from this config. Explicit CLI arguments take precedence:
+
+```bash
+# Uses config values
+typesafe-i18n generate
+
+# CLI args override config
+typesafe-i18n generate -d other_translations -l en
+```
+
+## Locale Detection
+
+Detect the user's locale from various sources:
+
+```python
+from typesafe_i18n.detectors import (
+    detect_locale,
+    init_accept_language_header_detector,
+    init_cookie_detector,
+    init_env_detector,
+    init_query_string_detector,
+    navigator_detector,
+)
+
+# From Accept-Language header
+detector = init_accept_language_header_detector("zh-CN,en;q=0.9")
+locales = detector()  # ["zh-CN", "en"]
+
+# From cookie
+detector = init_cookie_detector("lang=zh; theme=dark")
+locales = detector()  # ["zh"]
+
+# From environment variable
+detector = init_env_detector("LANG")
+locales = detector()
+
+# From query string
+detector = init_query_string_detector("?lang=zh&page=1")
+locales = detector()  # ["zh"]
+
+# From browser navigator.languages
+detector = navigator_detector(["zh-CN", "en-US", "en"])
+locales = detector()
+
+# Auto-detect with fallback
+locale = detect_locale("en", ["en", "zh", "fr"], detector)
+```
+
+## Built-in Formatters
+
+```python
+from typesafe_i18n.formatters import (
+    date, time, number, currency,
+    replace, identity, ignore,
+    uppercase, lowercase,
+)
+
+i18n.set_formatters({
+    "upper": uppercase,
+    "lower": lowercase,
+    "date": date("en", {"year": "numeric", "month": "long", "day": "numeric"}),
+    "time": time("en", {"hour": "2-digit", "minute": "2-digit"}),
+    "num": number("en", {"maximumFractionDigits": 2}),
+    "usd": currency("en", "USD"),
+    "trim": replace(r"^\s+|\s+$", ""),
+})
+```
+
 ## CLI Commands
 
 ### Generate type stubs
@@ -145,12 +303,15 @@ typesafe-i18n import translations.json
 ```python
 # settings.py
 MIDDLEWARE = [
-    'typesafe_i18n.adapters.django.DjangoI18nMiddleware',
+    'typesafe_i18n.contrib.django.I18nMiddleware',
     ...
 ]
 
+I18N_TRANSLATIONS_DIR = "translations"
+I18N_DEFAULT_LOCALE = "en"
+
 # views.py
-from typesafe_i18n.adapters.django import t
+from typesafe_i18n.contrib.django import t
 
 def my_view(request):
     return HttpResponse(t(request, "hello", name="World"))
@@ -160,43 +321,32 @@ def my_view(request):
 
 ```python
 from flask import Flask
-from typesafe_i18n.adapters.flask import FlaskI18n
+from typesafe_i18n.contrib.flask import TypesafeI18n
 
 app = Flask(__name__)
-i18n = FlaskI18n(app, translations_dir="translations")
+app.config["I18N_TRANSLATIONS_DIR"] = "translations"
+app.config["I18N_DEFAULT_LOCALE"] = "en"
+
+i18n = TypesafeI18n(app)
 
 @app.route("/")
 def index():
-    return i18n.t("hello", name="World")
+    from typesafe_i18n.contrib.flask import t
+    return t("hello", name="World")
 ```
 
 ### FastAPI
 
 ```python
-from fastapi import FastAPI, Depends
-from typesafe_i18n.adapters.fastapi import get_i18n, configure
+from fastapi import FastAPI, Depends, Request
+from typesafe_i18n.contrib.fastapi import configure, get_i18n
 
 app = FastAPI()
-configure(translations_dir="translations")
+configure(translations_dir="translations", default_locale="en")
 
 @app.get("/")
-async def index(i18n = Depends(get_i18n)):
+async def index(request: Request, i18n = Depends(get_i18n)):
     return {"message": i18n.t("hello", name="World")}
-```
-
-### Jinja2
-
-```python
-from jinja2 import Environment
-from typesafe_i18n.adapters.jinja2 import I18nExtension
-from typesafe_i18n.runtime import I18n
-
-env = Environment(extensions=[I18nExtension])
-env.globals["i18n"] = I18n("translations", "en")
-
-# In templates:
-# {{ t("hello", name="World") }}
-# {{ "hello" | t(name="World") }}
 ```
 
 ## Custom Formatters
@@ -211,26 +361,6 @@ i18n.set_formatters({
     "trim": lambda v: v.strip(),
     "currency": lambda v: f"${v:,.2f}",
 })
-```
-
-## Namespaces
-
-Organize translations in subdirectories:
-
-```
-translations/
-  en.yaml
-  en/
-    settings/
-      en.yaml
-    profile/
-      en.yaml
-```
-
-Access with dot notation:
-```python
-i18n.t("settings.title")
-i18n.t("profile.name")
 ```
 
 ## Type Safety

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import locale as _locale
 import re
+import threading
 from datetime import date as _date, datetime, time as _time
 from typing import Any, Callable
+
+_locale_lock = threading.Lock()
 
 
 def date(locale: str, options: dict[str, Any] | None = None) -> Callable[[Any], str]:
@@ -42,26 +45,24 @@ def time(locale: str, options: dict[str, Any] | None = None) -> Callable[[Any], 
 
 def number(locale: str, options: dict[str, Any] | None = None) -> Callable[[Any], str]:
     opts = options or {}
-    saved = _locale.getlocale(_locale.LC_NUMERIC)
 
     def _format(value: Any) -> str:
-        try:
-            _locale.setlocale(_locale.LC_NUMERIC, locale)
-        except _locale.Error:
-            pass
-        try:
-            digits = opts.get("maximumFractionDigits")
-            if digits is not None:
-                return _locale.format_string(f"%.{int(digits)}f", float(value), grouping=True)
-            v = float(value)
-            if v == int(v):
-                return _locale.format_string("%d", int(v), grouping=True)
-            return _locale.format_string("%.2f", v, grouping=True)
-        finally:
+        with _locale_lock:
+            saved = _locale.getlocale(_locale.LC_NUMERIC)
             try:
-                _locale.setlocale(_locale.LC_NUMERIC, saved)
-            except _locale.Error:
-                pass
+                _locale.setlocale(_locale.LC_NUMERIC, locale)
+                digits = opts.get("maximumFractionDigits")
+                if digits is not None:
+                    return _locale.format_string(f"%.{int(digits)}f", float(value), grouping=True)
+                v = float(value)
+                if v == int(v):
+                    return _locale.format_string("%d", int(v), grouping=True)
+                return _locale.format_string("%.2f", v, grouping=True)
+            finally:
+                try:
+                    _locale.setlocale(_locale.LC_NUMERIC, saved)
+                except _locale.Error:
+                    pass
 
     return _format
 

@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import tempfile
 from pathlib import Path
@@ -87,11 +88,7 @@ class TestGetBackendForFile:
         assert backend is None
 
 
-_toml_w_available = True
-try:
-    import tomli_w
-except ImportError:
-    _toml_w_available = False
+_toml_w_available = importlib.util.find_spec("tomli_w") is not None
 
 
 @pytest.mark.skipif(not _toml_w_available, reason="tomli_w not installed")

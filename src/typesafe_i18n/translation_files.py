@@ -31,8 +31,27 @@ def iter_translation_files(translations_dir: Path) -> list[Path]:
 
 
 def collect_locales(translations_dir: Path) -> list[str]:
-    locales = {path.stem for path in iter_translation_files(translations_dir)}
+    if not translations_dir.exists():
+        return []
+    locales = {
+        path.stem
+        for path in translations_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS and get_backend_for_file(path) is not None
+    }
     return sorted(locales)
+
+
+def find_file_by_stem(directory: Path, stem: str, backend: TranslationBackend | None = None) -> Path | None:
+    if backend is not None:
+        for ext in backend.extensions():
+            path = directory / f"{stem}{ext}"
+            if path.exists():
+                return path
+    for ext in SUPPORTED_EXTENSIONS:
+        path = directory / f"{stem}{ext}"
+        if path.exists():
+            return path
+    return None
 
 
 def collect_namespaces(translations_dir: Path, locale: str) -> list[str]:

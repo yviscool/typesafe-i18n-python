@@ -85,6 +85,6 @@ class TypesafeI18n:
 def t(key: str, **kwargs: Any) -> str:
     from flask import current_app, g
 
-    ext: TypesafeI18n = current_app.extensions["typesafe_i18n"]
+    _ = current_app.extensions["typesafe_i18n"]
     i18n: I18n = g.i18n
     return i18n.t(key, **kwargs)

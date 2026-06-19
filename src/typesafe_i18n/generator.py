@@ -13,7 +13,7 @@ from typesafe_i18n.parser import (
     parse_translation,
     validate_template,
 )
-from typesafe_i18n.translation_files import collect_locales, collect_namespaces, flatten_translation_tree, load_locale_sections
+from typesafe_i18n.translation_files import collect_locales, collect_namespaces, find_file_by_stem, flatten_translation_tree, load_locale_sections
 
 
 class TranslationValidationError(RuntimeError):
@@ -49,7 +49,7 @@ def generate(
     ns_sections: dict[str, dict[str, Any]] = {}
     for ns in namespaces:
         ns_dir = translations_dir / base_locale
-        ns_file = _find_backend_file(ns_dir, ns, _backend)
+        ns_file = find_file_by_stem(ns_dir, ns, _backend)
         if ns_file:
             file_backend = get_backend_for_file(ns_file) or _backend
             ns_sections[ns] = file_backend.load(ns_file)
@@ -297,18 +297,6 @@ def _flatten_sections(sections: dict[str, dict[str, Any]]) -> dict[str, str]:
     return flat
 
 
-def _find_backend_file(dir: Path, stem: str, backend: TranslationBackend) -> Path | None:
-    for ext in backend.extensions():
-        path = dir / f"{stem}{ext}"
-        if path.exists():
-            return path
-    for ext in (".yaml", ".yml", ".json", ".toml"):
-        path = dir / f"{stem}{ext}"
-        if path.exists():
-            return path
-    return None
-
-
 def _flatten(d: dict[str, Any], prefix: str = "") -> dict[str, str]:
     return flatten_translation_tree(d, prefix=prefix)
 
@@ -327,7 +315,7 @@ def _check_missing_keys(
     base_namespaces = collect_namespaces(translations_dir, base_locale)
     base_ns_flat: dict[str, str] = {}
     for ns in base_namespaces:
-        ns_file = _find_backend_file(translations_dir / base_locale, ns, backend)
+        ns_file = find_file_by_stem(translations_dir / base_locale, ns, backend)
         if ns_file:
             file_backend = get_backend_for_file(ns_file) or backend
             ns_data = file_backend.load(ns_file)
@@ -348,7 +336,7 @@ def _check_missing_keys(
         if base_ns_flat:
             locale_ns_flat: dict[str, str] = {}
             for ns in collect_namespaces(translations_dir, locale):
-                ns_file = _find_backend_file(translations_dir / locale, ns, backend)
+                ns_file = find_file_by_stem(translations_dir / locale, ns, backend)
                 if ns_file:
                     file_backend = get_backend_for_file(ns_file) or backend
                     ns_data = file_backend.load(ns_file)

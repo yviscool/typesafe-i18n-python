@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from typesafe_i18n.backends import TranslationBackend, YAMLBackend, get_backend_for_file
+from typesafe_i18n.translation_files import find_file_by_stem
 
 
 async def load_locale_async(
@@ -45,7 +46,7 @@ def _find_and_load(
     locale: str,
     backend: TranslationBackend,
 ) -> dict[str, Any]:
-    path = _find_translation_file(dir, locale, backend)
+    path = find_file_by_stem(dir, locale, backend)
     if path is None:
         raise FileNotFoundError(f"Translation file not found for locale '{locale}' in {dir}")
     file_backend = get_backend_for_file(path) or backend
@@ -58,44 +59,11 @@ def _find_and_load_namespace(
     namespace: str,
     backend: TranslationBackend,
 ) -> dict[str, Any]:
-    path = _find_namespace_file(dir, locale, namespace, backend)
+    locale_dir = dir / locale
+    path = find_file_by_stem(locale_dir, namespace, backend)
     if path is None:
         raise FileNotFoundError(
             f"Namespace file not found for locale '{locale}', namespace '{namespace}' in {dir}"
         )
     file_backend = get_backend_for_file(path) or backend
     return file_backend.load(path)
-
-
-def _find_translation_file(
-    dir: Path,
-    locale: str,
-    backend: TranslationBackend,
-) -> Path | None:
-    for ext in backend.extensions():
-        path = dir / f"{locale}{ext}"
-        if path.exists():
-            return path
-    for ext in (".yaml", ".yml", ".json", ".toml"):
-        path = dir / f"{locale}{ext}"
-        if path.exists():
-            return path
-    return None
-
-
-def _find_namespace_file(
-    dir: Path,
-    locale: str,
-    namespace: str,
-    backend: TranslationBackend,
-) -> Path | None:
-    locale_dir = dir / locale
-    for ext in backend.extensions():
-        path = locale_dir / f"{namespace}{ext}"
-        if path.exists():
-            return path
-    for ext in (".yaml", ".yml", ".json", ".toml"):
-        path = locale_dir / f"{namespace}{ext}"
-        if path.exists():
-            return path
-    return None

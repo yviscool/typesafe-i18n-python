@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import re
 from datetime import date, datetime, time
-
-import pytest
 
 from typesafe_i18n.formatters import (
     currency,

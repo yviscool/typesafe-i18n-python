@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import json
 import tempfile
 from pathlib import Path
 
-import pytest
 import yaml
 
 from typesafe_i18n.translation_files import (
     collect_locales,
     extend_dictionary,
+    find_file_by_stem,
     flatten_translation_tree,
     iter_locale_files,
     iter_translation_files,
@@ -90,6 +89,20 @@ class TestCollectLocales:
             (Path(tmpdir) / "zh.yaml").write_text("hello: 你好")
             (Path(tmpdir) / "de.yaml").write_text("hello: Hallo")
             assert collect_locales(Path(tmpdir)) == ["de", "en", "zh"]
+
+    def test_excludes_namespace_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            (base / "en.yaml").write_text("hello: Hi")
+            (base / "zh.yaml").write_text("hello: 你好")
+            en_dir = base / "en"
+            en_dir.mkdir()
+            (en_dir / "settings.yaml").write_text("title: Settings")
+            (en_dir / "profile.yaml").write_text("name: Profile")
+            locales = collect_locales(base)
+            assert locales == ["en", "zh"]
+            assert "settings" not in locales
+            assert "profile" not in locales
 
 
 class TestIterLocaleFiles:
@@ -245,3 +258,51 @@ class TestLoadLocaleWithFallback:
             (Path(tmpdir) / "zh.yaml").write_text("{}")
             result = load_locale_with_fallback(Path(tmpdir), "zh", "en")
             assert result == {}
+
+
+class TestFindFileByStem:
+    def test_yaml_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "en.yaml").write_text("hello: Hi")
+            result = find_file_by_stem(Path(tmpdir), "en")
+            assert result is not None
+            assert result.name == "en.yaml"
+
+    def test_yml_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "en.yml").write_text("hello: Hi")
+            result = find_file_by_stem(Path(tmpdir), "en")
+            assert result is not None
+            assert result.name == "en.yml"
+
+    def test_json_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "en.json").write_text('{"hello": "Hi"}')
+            result = find_file_by_stem(Path(tmpdir), "en")
+            assert result is not None
+            assert result.name == "en.json"
+
+    def test_not_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "en.yaml").write_text("hello: Hi")
+            result = find_file_by_stem(Path(tmpdir), "fr")
+            assert result is None
+
+    def test_backend_hint_priority(self):
+        from typesafe_i18n.backends import JSONBackend
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "en.json").write_text('{"hello": "Hi"}')
+            (Path(tmpdir) / "en.yaml").write_text("hello: Hi")
+            result = find_file_by_stem(Path(tmpdir), "en", JSONBackend())
+            assert result is not None
+            assert result.name == "en.json"
+
+    def test_backend_hint_fallback(self):
+        from typesafe_i18n.backends import JSONBackend
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "en.yaml").write_text("hello: Hi")
+            result = find_file_by_stem(Path(tmpdir), "en", JSONBackend())
+            assert result is not None
+            assert result.name == "en.yaml"
