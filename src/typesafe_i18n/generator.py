@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from typesafe_i18n.backends import TranslationBackend, YAMLBackend
+from typesafe_i18n.backends import TranslationBackend, YAMLBackend, get_backend_for_file
 from typesafe_i18n.parser import (
     PluralPart,
     extract_custom_types,
@@ -13,7 +13,7 @@ from typesafe_i18n.parser import (
     parse_translation,
     validate_template,
 )
-from typesafe_i18n.translation_files import collect_locales, flatten_translation_tree, load_locale_sections
+from typesafe_i18n.translation_files import collect_locales, collect_namespaces, flatten_translation_tree, load_locale_sections
 
 
 class TranslationValidationError(RuntimeError):
@@ -45,7 +45,19 @@ def generate(
     if not base_sections:
         raise FileNotFoundError(f"Base locale file not found for '{base_locale}' in {translations_dir}")
 
+    namespaces = collect_namespaces(translations_dir, base_locale)
+    ns_sections: dict[str, dict[str, Any]] = {}
+    for ns in namespaces:
+        ns_dir = translations_dir / base_locale
+        ns_file = _find_backend_file(ns_dir, ns, _backend)
+        if ns_file:
+            file_backend = get_backend_for_file(ns_file) or _backend
+            ns_sections[ns] = file_backend.load(ns_file)
+
     all_flat = _flatten_sections(base_sections)
+    for ns, ns_data in ns_sections.items():
+        ns_flat = flatten_translation_tree(ns_data, prefix=f"{ns}:")
+        all_flat.update(ns_flat)
 
     validation_errors = _validate_translations(all_flat)
     for err in validation_errors:
@@ -285,6 +297,18 @@ def _flatten_sections(sections: dict[str, dict[str, Any]]) -> dict[str, str]:
     return flat
 
 
+def _find_backend_file(dir: Path, stem: str, backend: TranslationBackend) -> Path | None:
+    for ext in backend.extensions():
+        path = dir / f"{stem}{ext}"
+        if path.exists():
+            return path
+    for ext in (".yaml", ".yml", ".json", ".toml"):
+        path = dir / f"{stem}{ext}"
+        if path.exists():
+            return path
+    return None
+
+
 def _flatten(d: dict[str, Any], prefix: str = "") -> dict[str, str]:
     return flatten_translation_tree(d, prefix=prefix)
 
@@ -300,6 +324,15 @@ def _check_missing_keys(
         prefix: flatten_translation_tree(data, prefix=prefix) for prefix, data in base_sections.items()
     }
 
+    base_namespaces = collect_namespaces(translations_dir, base_locale)
+    base_ns_flat: dict[str, str] = {}
+    for ns in base_namespaces:
+        ns_file = _find_backend_file(translations_dir / base_locale, ns, backend)
+        if ns_file:
+            file_backend = get_backend_for_file(ns_file) or backend
+            ns_data = file_backend.load(ns_file)
+            base_ns_flat.update(flatten_translation_tree(ns_data, prefix=f"{ns}:"))
+
     for locale in collect_locales(translations_dir):
         if locale == base_locale:
             continue
@@ -311,5 +344,17 @@ def _check_missing_keys(
             if missing:
                 for key in sorted(missing):
                     warnings.append(f"Locale '{locale}' missing key: {key}")
+
+        if base_ns_flat:
+            locale_ns_flat: dict[str, str] = {}
+            for ns in collect_namespaces(translations_dir, locale):
+                ns_file = _find_backend_file(translations_dir / locale, ns, backend)
+                if ns_file:
+                    file_backend = get_backend_for_file(ns_file) or backend
+                    ns_data = file_backend.load(ns_file)
+                    locale_ns_flat.update(flatten_translation_tree(ns_data, prefix=f"{ns}:"))
+            missing_ns = set(base_ns_flat.keys()) - set(locale_ns_flat.keys())
+            for key in sorted(missing_ns):
+                warnings.append(f"Locale '{locale}' missing namespace key: {key}")
 
     return warnings

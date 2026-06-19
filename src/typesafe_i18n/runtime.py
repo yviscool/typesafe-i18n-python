@@ -5,6 +5,8 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable
 
+import asyncio
+
 from typesafe_i18n.backends import TranslationBackend, YAMLBackend, get_backend_for_file
 from typesafe_i18n.parser import ArgPart, PluralPart, TextPart, normalize_placeholder_name, parse_translation
 from typesafe_i18n.plural import get_plural_form
@@ -32,6 +34,10 @@ class I18n:
         self._translations: dict[str, Any] = {}
         self._cache: OrderedDict[str, list[ArgPart | PluralPart | TextPart]] = OrderedDict()
         self._formatters: dict[str, Callable[..., str]] = {}
+        self._fallback_locale: str | None = None
+        self._fallback_translations: dict[str, Any] = {}
+        self._fallback_namespaces: dict[str, dict[str, Any]] = {}
+        self._namespaces: dict[str, dict[str, Any]] = {}
         self._load(self._translations_dir, locale)
 
     def _load(self, translations_dir: Path, locale: str) -> None:
@@ -62,12 +68,72 @@ class I18n:
             self._locale = locale
             self._translations = {}
             self._cache.clear()
+            self._namespaces.clear()
             self._load(self._translations_dir, locale)
+
+    def set_fallback_locale(self, locale: str) -> None:
+        with self._lock:
+            self._fallback_locale = locale
+            self._fallback_translations = {}
+            self._fallback_namespaces = {}
+            self._load_fallback(self._translations_dir, locale)
+
+    def _load_fallback(self, translations_dir: Path, locale: str) -> None:
+        path = self._find_translation_file(translations_dir, locale)
+        if path is None:
+            return
+        backend = get_backend_for_file(path) or self._backend
+        self._fallback_translations = backend.load(path)
+
+        locale_dir = translations_dir / locale
+        if not locale_dir.is_dir():
+            return
+        for ns_file in locale_dir.iterdir():
+            if ns_file.is_file() and get_backend_for_file(ns_file) is not None:
+                ns_backend = get_backend_for_file(ns_file) or backend
+                self._fallback_namespaces[ns_file.stem] = ns_backend.load(ns_file)
 
     def set_formatters(self, formatters: dict[str, Callable[..., str]]) -> None:
         """Register custom formatter functions."""
         with self._lock:
             self._formatters = formatters
+
+    def load_namespace(self, namespace: str) -> None:
+        locale_dir = self._translations_dir / self._locale
+        path = self._find_namespace_file(locale_dir, namespace)
+        if path is None:
+            raise FileNotFoundError(
+                f"Namespace file not found for locale '{self._locale}', namespace '{namespace}' in {self._translations_dir}"
+            )
+        backend = get_backend_for_file(path) or self._backend
+        data = backend.load(path)
+        with self._lock:
+            self._namespaces[namespace] = data
+            self._cache.clear()
+
+    async def load_namespace_async(self, namespace: str) -> None:
+        with self._lock:
+            locale = self._locale
+            translations_dir = self._translations_dir
+        data = await asyncio.to_thread(
+            _find_and_load_namespace, translations_dir, locale, namespace, self._backend
+        )
+        with self._lock:
+            self._namespaces[namespace] = data
+            self._cache.clear()
+
+    def _find_namespace_file(self, locale_dir: Path, namespace: str) -> Path | None:
+        if not locale_dir.is_dir():
+            return None
+        for ext in self._backend.extensions():
+            path = locale_dir / f"{namespace}{ext}"
+            if path.exists():
+                return path
+        for ext in (".yaml", ".yml", ".json", ".toml"):
+            path = locale_dir / f"{namespace}{ext}"
+            if path.exists():
+                return path
+        return None
 
     def t(self, key: str, **kwargs: Any) -> str:
         """Translate a key with the current locale. Thread-safe."""
@@ -76,20 +142,47 @@ class I18n:
         return self._render(parts, kwargs)
 
     def _get_template(self, key: str) -> str:
+        if ":" in key:
+            namespace, _, ns_key = key.partition(":")
+            ns_data = self._namespaces.get(namespace)
+            if ns_data is not None:
+                result = self._resolve_key(ns_data, ns_key)
+                if isinstance(result, str):
+                    return result
+            fb_ns = self._fallback_namespaces.get(namespace)
+            if fb_ns is not None:
+                result = self._resolve_key(fb_ns, ns_key)
+                if isinstance(result, str):
+                    return result
+            return self._get_fallback_template(key)
+
+        result = self._resolve_key(self._translations, key)
+        if isinstance(result, str):
+            return result
+        return self._get_fallback_template(key)
+
+    @staticmethod
+    def _resolve_key(data: dict[str, Any], key: str) -> Any:
         keys = key.split(".")
-        obj: Any = self._translations
+        obj: Any = data
         for k in keys:
             if isinstance(obj, dict):
                 obj = obj.get(k)
                 if obj is None:
-                    return key
+                    return None
             else:
-                return key
-        if isinstance(obj, str):
-            return obj
-        if isinstance(obj, dict):
+                return None
+        return obj
+
+    def _get_fallback_template(self, key: str) -> str:
+        if not self._fallback_translations:
             return key
-        return str(obj) if obj is not None else key
+        result = self._resolve_key(self._fallback_translations, key)
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict):
+            return key
+        return str(result) if result is not None else key
 
     def _get_parts(self, template: str) -> list[ArgPart | PluralPart | TextPart]:
         with self._lock:
@@ -172,3 +265,31 @@ class I18n:
         full = {"zero": 0, "one": 1, "two": 2, "few": 3, "many": 4, "other": 5}
         idx = full.get(form, 5)
         return min(idx, num_forms - 1)
+
+
+def _find_and_load_namespace(
+    translations_dir: Path, locale: str, namespace: str, backend: TranslationBackend
+) -> dict[str, Any]:
+    locale_dir = translations_dir / locale
+    if not locale_dir.is_dir():
+        raise FileNotFoundError(
+            f"Namespace file not found for locale '{locale}', namespace '{namespace}' in {translations_dir}"
+        )
+    path: Path | None = None
+    for ext in backend.extensions():
+        candidate = locale_dir / f"{namespace}{ext}"
+        if candidate.exists():
+            path = candidate
+            break
+    if path is None:
+        for ext in (".yaml", ".yml", ".json", ".toml"):
+            candidate = locale_dir / f"{namespace}{ext}"
+            if candidate.exists():
+                path = candidate
+                break
+    if path is None:
+        raise FileNotFoundError(
+            f"Namespace file not found for locale '{locale}', namespace '{namespace}' in {translations_dir}"
+        )
+    file_backend = get_backend_for_file(path) or backend
+    return file_backend.load(path)

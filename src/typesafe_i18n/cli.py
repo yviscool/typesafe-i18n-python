@@ -9,6 +9,7 @@ from typing import Any
 
 import yaml
 
+from typesafe_i18n.config import TypesafeI18nConfig
 from typesafe_i18n.generator import TranslationValidationError, generate
 from typesafe_i18n.parser import validate_template
 from typesafe_i18n.translation_files import collect_locales, flatten_translation_tree, iter_translation_files, load_locale_sections
@@ -23,29 +24,29 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command")
 
     gen_parser = subparsers.add_parser("generate", help="Generate type stubs from translations")
-    gen_parser.add_argument("-d", "--dir", default="translations", help="Translations directory")
-    gen_parser.add_argument("-o", "--output", default="_generated", help="Output directory")
-    gen_parser.add_argument("-l", "--locale", default="en", help="Base locale")
+    gen_parser.add_argument("-d", "--dir", default=None, help="Translations directory")
+    gen_parser.add_argument("-o", "--output", default=None, help="Output directory")
+    gen_parser.add_argument("-l", "--locale", default=None, help="Base locale")
     gen_parser.add_argument("--watch", action="store_true", help="Watch for changes and regenerate")
     gen_parser.add_argument("--no-check", action="store_true", help="Skip missing key checks")
 
     validate_parser = subparsers.add_parser("validate", help="Validate translations")
-    validate_parser.add_argument("-d", "--dir", default="translations", help="Translations directory")
-    validate_parser.add_argument("-l", "--locale", default="en", help="Base locale")
+    validate_parser.add_argument("-d", "--dir", default=None, help="Translations directory")
+    validate_parser.add_argument("-l", "--locale", default=None, help="Base locale")
 
     extract_parser = subparsers.add_parser("extract", help="Extract translation keys from source")
     extract_parser.add_argument("source", help="Source directory to scan")
-    extract_parser.add_argument("-d", "--dir", default="translations", help="Translations directory")
-    extract_parser.add_argument("-l", "--locale", default="en", help="Base locale")
+    extract_parser.add_argument("-d", "--dir", default=None, help="Translations directory")
+    extract_parser.add_argument("-l", "--locale", default=None, help="Base locale")
 
     export_parser = subparsers.add_parser("export", help="Export translations to JSON")
-    export_parser.add_argument("-d", "--dir", default="translations", help="Translations directory")
+    export_parser.add_argument("-d", "--dir", default=None, help="Translations directory")
     export_parser.add_argument("-o", "--output", default="translations.json", help="Output file")
     export_parser.add_argument("-l", "--locale", help="Export specific locale only")
 
     import_parser = subparsers.add_parser("import", help="Import translations from JSON")
     import_parser.add_argument("file", help="JSON file to import")
-    import_parser.add_argument("-d", "--dir", default="translations", help="Translations directory")
+    import_parser.add_argument("-d", "--dir", default=None, help="Translations directory")
 
     args = parser.parse_args()
 
@@ -66,10 +67,15 @@ def main() -> None:
 
 def _cmd_generate(args: argparse.Namespace) -> None:
     try:
+        config = TypesafeI18nConfig.find()
+        trans_dir = args.dir or config.translations_path
+        output_dir = args.output or config.output_path
+        locale = args.locale or config.base_locale
+
         if args.watch:
-            _watch_and_generate(args.dir, args.output, args.locale, not args.no_check)
+            _watch_and_generate(trans_dir, output_dir, locale, not args.no_check)
         else:
-            generate(args.dir, args.output, args.locale, check_missing=not args.no_check, fail_on_validation_error=True)
+            generate(trans_dir, output_dir, locale, check_missing=not args.no_check, fail_on_validation_error=True)
     except TranslationValidationError:
         sys.exit(1)
     except FileNotFoundError as e:
@@ -112,7 +118,9 @@ def _get_last_modified(directory: str) -> float:
 
 
 def _cmd_validate(args: argparse.Namespace) -> None:
-    translations_dir = Path(args.dir)
+    config = TypesafeI18nConfig.find()
+    translations_dir = Path(args.dir or config.translations_path)
+    locale = args.locale or config.base_locale
     if not translations_dir.exists():
         print(f"Error: Directory not found: {translations_dir}", file=sys.stderr)
         sys.exit(1)
@@ -120,9 +128,9 @@ def _cmd_validate(args: argparse.Namespace) -> None:
     errors: list[str] = []
     warnings: list[str] = []
 
-    base_sections = load_locale_sections(translations_dir, args.locale)
+    base_sections = load_locale_sections(translations_dir, locale)
     if not base_sections:
-        print(f"Error: Base locale file not found: {args.locale}", file=sys.stderr)
+        print(f"Error: Base locale file not found: {locale}", file=sys.stderr)
         sys.exit(1)
 
     base_flat_sections = {
@@ -164,8 +172,10 @@ def _cmd_validate(args: argparse.Namespace) -> None:
 
 
 def _cmd_extract(args: argparse.Namespace) -> None:
+    config = TypesafeI18nConfig.find()
     source_dir = Path(args.source)
-    translations_dir = Path(args.dir)
+    translations_dir = Path(args.dir or config.translations_path)
+    locale = args.locale or config.base_locale
 
     if not source_dir.exists():
         print(f"Error: Source directory not found: {source_dir}", file=sys.stderr)
@@ -180,7 +190,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         for match in t_call_re.finditer(content):
             used_keys.add(match.group(1))
 
-    base_sections = load_locale_sections(translations_dir, args.locale)
+    base_sections = load_locale_sections(translations_dir, locale)
     defined_keys: set[str] = set()
     for prefix, data in base_sections.items():
         defined_keys.update(flatten_translation_tree(data, prefix=prefix).keys())
@@ -201,7 +211,8 @@ def _cmd_extract(args: argparse.Namespace) -> None:
 
 
 def _cmd_export(args: argparse.Namespace) -> None:
-    translations_dir = Path(args.dir)
+    config = TypesafeI18nConfig.find()
+    translations_dir = Path(args.dir or config.translations_path)
     if not translations_dir.exists():
         print(f"Error: Directory not found: {translations_dir}", file=sys.stderr)
         sys.exit(1)
@@ -225,7 +236,8 @@ def _cmd_export(args: argparse.Namespace) -> None:
 
 
 def _cmd_import(args: argparse.Namespace) -> None:
-    translations_dir = Path(args.dir)
+    config = TypesafeI18nConfig.find()
+    translations_dir = Path(args.dir or config.translations_path)
     translations_dir.mkdir(parents=True, exist_ok=True)
 
     with open(args.file, encoding="utf-8") as f:

@@ -167,3 +167,49 @@ class TestI18nOptional:
     def test_optional_missing(self, translations_dir):
         i18n = I18n(translations_dir, "en")
         assert i18n.t("optional") == "Hello "
+
+
+class TestI18nFallback:
+    def test_fallback_fills_missing_key(self, translations_dir):
+        i18n = I18n(translations_dir, "zh")
+        i18n.set_fallback_locale("en")
+        assert i18n.t("upper", name="world") == "Hello world!"
+
+    def test_fallback_does_not_override_existing(self, translations_dir):
+        i18n = I18n(translations_dir, "zh")
+        i18n.set_fallback_locale("en")
+        assert "你好" in i18n.t("hello", name="World")
+
+    def test_fallback_with_nested_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            en = {"user": {"greeting": "Hello {name:string}!"}}
+            zh = {"other": "其他"}
+            with open(Path(tmpdir) / "en.yaml", "w") as f:
+                yaml.dump(en, f)
+            with open(Path(tmpdir) / "zh.yaml", "w") as f:
+                yaml.dump(zh, f)
+            i18n = I18n(tmpdir, "zh")
+            i18n.set_fallback_locale("en")
+            assert i18n.t("user.greeting", name="World") == "Hello World!"
+
+    def test_fallback_missing_in_both(self, translations_dir):
+        i18n = I18n(translations_dir, "zh")
+        i18n.set_fallback_locale("en")
+        assert i18n.t("nonexistent") == "nonexistent"
+
+    def test_set_fallback_locale_property(self, translations_dir):
+        i18n = I18n(translations_dir, "en")
+        i18n.set_fallback_locale("zh")
+        assert i18n._fallback_locale == "zh"
+
+    def test_fallback_switch_locale_preserves_fallback(self, translations_dir):
+        i18n = I18n(translations_dir, "en")
+        i18n.set_fallback_locale("zh")
+        i18n.set_locale("zh")
+        assert "你好" in i18n.t("hello", name="World")
+
+    def test_fallback_with_formatters(self, translations_dir):
+        i18n = I18n(translations_dir, "zh")
+        i18n.set_fallback_locale("en")
+        i18n.set_formatters({"upper": lambda v: v.upper()})
+        assert i18n.t("upper", name="world") == "Hello WORLD!"

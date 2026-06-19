@@ -87,6 +87,14 @@ class TestGetBackendForFile:
         assert backend is None
 
 
+_toml_w_available = True
+try:
+    import tomli_w
+except ImportError:
+    _toml_w_available = False
+
+
+@pytest.mark.skipif(not _toml_w_available, reason="tomli_w not installed")
 class TestTOMLBackend:
     def test_save_and_load(self):
         with tempfile.NamedTemporaryFile(suffix=".toml", delete=False) as f:

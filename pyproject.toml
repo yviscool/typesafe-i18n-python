@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "typesafe-i18n"
-version = "0.3.1"
+version = "0.4.0"
 description = "Type-safe internationalization for Python"
 readme = "README.md"
 license = { text = "MIT" }
@@ -51,6 +51,7 @@ packages = ["src/typesafe_i18n"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 120

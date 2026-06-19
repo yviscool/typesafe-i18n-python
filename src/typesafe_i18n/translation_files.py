@@ -35,6 +35,17 @@ def collect_locales(translations_dir: Path) -> list[str]:
     return sorted(locales)
 
 
+def collect_namespaces(translations_dir: Path, locale: str) -> list[str]:
+    locale_dir = translations_dir / locale
+    if not locale_dir.is_dir():
+        return []
+    namespaces: list[str] = []
+    for path in iter_translation_files(locale_dir):
+        if path.parent == locale_dir:
+            namespaces.append(path.stem)
+    return sorted(namespaces)
+
+
 def iter_locale_files(translations_dir: Path, locale: str) -> list[Path]:
     files: list[Path] = []
     if not translations_dir.exists():
@@ -42,9 +53,13 @@ def iter_locale_files(translations_dir: Path, locale: str) -> list[Path]:
 
     locale_dir = translations_dir / locale
     for path in iter_translation_files(translations_dir):
-        if path.parent == translations_dir or path.is_relative_to(locale_dir):
+        if path.parent == translations_dir:
             if path.stem == locale:
                 files.append(path)
+        elif path.is_relative_to(locale_dir):
+            if path.parent == locale_dir and path.stem != locale:
+                continue
+            files.append(path)
     return files
 
 
@@ -77,3 +92,42 @@ def load_locale_sections(
         if isinstance(data, dict):
             sections[prefix] = dict(data)
     return sections
+
+
+def extend_dictionary(base: dict, overrides: dict) -> dict:
+    result = dict(base)
+    for key, value in overrides.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = extend_dictionary(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def load_locale_with_fallback(
+    translations_dir: Path,
+    locale: str,
+    fallback_locale: str,
+    backend: TranslationBackend | None = None,
+) -> dict[str, Any]:
+    base_sections = load_locale_sections(translations_dir, fallback_locale, backend)
+    locale_sections = load_locale_sections(translations_dir, locale, backend)
+    merged: dict[str, Any] = {}
+    for prefix, data in base_sections.items():
+        merged[prefix] = data
+    for prefix, data in locale_sections.items():
+        if prefix in merged:
+            merged[prefix] = extend_dictionary(merged[prefix], data)
+        else:
+            merged[prefix] = data
+    result: dict[str, Any] = {}
+    for prefix, data in merged.items():
+        if prefix:
+            parts = prefix.split(".")
+            target = result
+            for part in parts[:-1]:
+                target = target.setdefault(part, {})
+            target[parts[-1]] = data
+        else:
+            result.update(data)
+    return result
