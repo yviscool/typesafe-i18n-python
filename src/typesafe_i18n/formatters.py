@@ -51,6 +51,9 @@ def number(locale: str, options: dict[str, Any] | None = None) -> Callable[[Any]
             saved = _locale.getlocale(_locale.LC_NUMERIC)
             try:
                 _locale.setlocale(_locale.LC_NUMERIC, locale)
+            except _locale.Error:
+                pass
+            try:
                 digits = opts.get("maximumFractionDigits")
                 if digits is not None:
                     return _locale.format_string(f"%.{int(digits)}f", float(value), grouping=True)
