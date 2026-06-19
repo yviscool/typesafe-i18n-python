@@ -17,7 +17,8 @@ async def load_locale_async(
 ) -> dict[str, Any]:
     resolved_dir = Path(translations_dir)
     effective_backend = backend or YAMLBackend()
-    return await _to_thread(_find_and_load, resolved_dir, locale, effective_backend, executor=executor)
+    result: dict[str, Any] = await _to_thread(_find_and_load, resolved_dir, locale, effective_backend, executor=executor)
+    return result
 
 
 async def load_namespace_async(
@@ -29,9 +30,10 @@ async def load_namespace_async(
 ) -> dict[str, Any]:
     resolved_dir = Path(translations_dir)
     effective_backend = backend or YAMLBackend()
-    return await _to_thread(
+    result: dict[str, Any] = await _to_thread(
         _find_and_load_namespace, resolved_dir, locale, namespace, effective_backend, executor=executor
     )
+    return result
 
 
 async def _to_thread(func: Any, *args: Any, executor: Executor | None = None, **kwargs: Any) -> Any:

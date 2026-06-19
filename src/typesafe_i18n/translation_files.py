@@ -113,7 +113,7 @@ def load_locale_sections(
     return sections
 
 
-def extend_dictionary(base: dict, overrides: dict) -> dict:
+def extend_dictionary(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
     result = dict(base)
     for key, value in overrides.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):

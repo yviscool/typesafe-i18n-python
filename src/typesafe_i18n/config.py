@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 @dataclass
@@ -19,7 +20,7 @@ class TypesafeI18nConfig:
     def from_file(cls, path: str | Path) -> TypesafeI18nConfig:
         path = Path(path)
         with open(path, encoding="utf-8") as f:
-            data: dict = json.load(f)
+            data: dict[str, Any] = json.load(f)
         return cls(
             base_locale=data.get("baseLocale", data.get("base_locale", "en")),
             output_path=data.get("outputPath", data.get("output_path", "./_generated")),
